@@ -1,0 +1,48 @@
+name: Importar Leads Meta Ads → Odoo
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"  # a cada 15 minutos
+  workflow_dispatch:          # permite rodar manualmente pelo GitHub
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Restaurar IDs já importados
+        uses: actions/cache@v4
+        with:
+          path: processed_ids.json
+          key: processed-ids-${{ github.run_id }}
+          restore-keys: processed-ids-
+
+      - name: Importar leads
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USER: ${{ secrets.ODOO_USER }}
+          ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
+          ODOO_TEAM_ID: "17"
+          ODOO_STAGE_ID: "17"
+          SPREADSHEET_ID: "12UT2WhaIWsjZW-ojJ1Asy6bH3zaTsDLcRdwiKN3D3_I"
+        run: python import_leads.py
+
+      - name: Salvar IDs importados
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: processed_ids.json
+          key: processed-ids-${{ github.run_id }}
