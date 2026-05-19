@@ -8,6 +8,7 @@ on:
 jobs:
   import:
     runs-on: ubuntu-latest
+    environment: automações
 
     steps:
       - name: Checkout código
