@@ -64,6 +64,7 @@ def save_processed_ids(ids: set) -> None:
 def get_sheet_records() -> list[dict]:
     response = requests.get(SHEETS_CSV_URL, timeout=30)
     response.raise_for_status()
+    response.encoding = "utf-8"
     reader = csv.DictReader(io.StringIO(response.text))
     return list(reader)
 
