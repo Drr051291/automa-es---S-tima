@@ -81,36 +81,50 @@ def odoo_connect():
     return models, uid
 
 
+# Mapeamento dos hashes das Properties do Odoo -> coluna no Sheets
+LEAD_PROPERTIES_MAP = {
+    "21787d30494d3a40": "qual_o_seu_cargo_?",
+    "41ce60baaee088c1": "faturamento_anual_médio",
+    "188ab74703451402": "segmento_da_sua_empresa",
+    "b49c6c5c6fc45f8a": "modelo_atual_de_produção_de_conteúdo",
+    "881921103e407f69": "número_de_funcionários",
+    "834030f02ce53208": "site_da_sua_empresa",
+}
+
+
+def build_lead_properties(row: dict) -> list:
+    return [
+        {"name": hash_key, "value": row.get(sheet_col, "").strip()}
+        for hash_key, sheet_col in LEAD_PROPERTIES_MAP.items()
+    ]
+
+
 def build_lead_vals(row: dict) -> dict:
+    phone_raw = row.get("phone_number", "").strip()
+    phone = phone_raw.replace("p:", "").strip()
+
     description_lines = [
-        f"Origem: Meta Ads — {row.get('platform', '')}",
+        f"Origem: Meta Ads - {row.get('platform', '')}",
         f"Campanha: {row.get('campaign_name', '')} (ID: {row.get('campaign_id', '')})",
-        f"Conjunto de anúncios: {row.get('adset_name', '')}",
-        f"Anúncio: {row.get('ad_name', '')}",
-        f"Formulário: {row.get('form_name', '')}",
-        "",
-        f"Cargo: {row.get('qual_o_seu_cargo_?', '')}",
-        f"Faturamento anual médio: {row.get('faturamento_anual_médio', '')}",
-        f"Segmento: {row.get('segmento_da_sua_empresa', '')}",
-        f"Modelo de produção de conteúdo: {row.get('modelo_atual_de_produção_de_conteúdo', '')}",
-        f"Número de funcionários: {row.get('número_de_funcionários', '')}",
-        f"Site: {row.get('site_da_sua_empresa', '')}",
+        f"Conjunto de anuncios: {row.get('adset_name', '')}",
+        f"Anuncio: {row.get('ad_name', '')}",
+        f"Formulario: {row.get('form_name', '')}",
         "",
         f"Lead ID (Meta): {row.get('id', '')}",
-        f"Data de criação (Meta): {row.get('created_time', '')}",
+        f"Data de criacao (Meta): {row.get('created_time', '')}",
     ]
 
     vals = {
         "name": row.get("full_name", "Lead Meta Ads").strip() or "Lead Meta Ads",
         "contact_name": row.get("full_name", "").strip(),
         "email_from": row.get("email", "").strip(),
-        "phone": row.get("phone_number", "").strip().replace("p:", ""),
+        "phone": phone,
         "partner_name": row.get("company_name", "").strip(),
-        "website": row.get("site_da_sua_empresa", "").strip(),
         "description": "\n".join(description_lines),
         "type": "opportunity",
         "team_id": ODOO_TEAM_ID,
         "stage_id": ODOO_STAGE_ID,
+        "lead_properties": build_lead_properties(row),
     }
 
     return {k: v for k, v in vals.items() if v not in (None, "", 0)}
