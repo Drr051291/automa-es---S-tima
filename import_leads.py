@@ -84,12 +84,18 @@ def odoo_connect():
 
 # Mapeamento dos hashes das Properties do Odoo -> coluna no Sheets
 LEAD_PROPERTIES_MAP = {
+    # Dados do formulário
     "21787d30494d3a40": "qual_o_seu_cargo_?",
     "41ce60baaee088c1": "faturamento_anual_médio",
     "188ab74703451402": "segmento_da_sua_empresa",
     "b49c6c5c6fc45f8a": "modelo_atual_de_produção_de_conteúdo",
     "881921103e407f69": "número_de_funcionários",
     "834030f02ce53208": "site_da_sua_empresa",
+    # UTM / Meta Ads
+    "324e2a46af924b86": "campaign_name",
+    "84f5d4100dc16aa6": "adset_name",
+    "8a501dfea857d1ef": "ad_name",
+    "58b355d3cd153bd0": "platform",
 }
 
 
@@ -105,14 +111,9 @@ def build_lead_vals(row: dict) -> dict:
     phone = phone_raw.replace("p:", "").strip()
 
     description_lines = [
-        f"Origem: Meta Ads - {row.get('platform', '')}",
-        f"Campanha: {row.get('campaign_name', '')} (ID: {row.get('campaign_id', '')})",
-        f"Conjunto de anuncios: {row.get('adset_name', '')}",
-        f"Anuncio: {row.get('ad_name', '')}",
-        f"Formulario: {row.get('form_name', '')}",
-        "",
         f"Lead ID (Meta): {row.get('id', '')}",
         f"Data de criacao (Meta): {row.get('created_time', '')}",
+        f"Formulario: {row.get('form_name', '')}",
     ]
 
     vals = {
