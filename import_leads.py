@@ -108,7 +108,7 @@ def build_lead_vals(row: dict) -> dict:
         "partner_name": row.get("company_name", "").strip(),
         "website": row.get("site_da_sua_empresa", "").strip(),
         "description": "\n".join(description_lines),
-        "type": "lead",
+        "type": "opportunity",
         "team_id": ODOO_TEAM_ID,
         "stage_id": ODOO_STAGE_ID,
     }
