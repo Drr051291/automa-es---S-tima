@@ -1,0 +1,6 @@
+.env
+google-credentials.json
+processed_ids.json
+import_leads.log
+__pycache__/
+*.pyc
