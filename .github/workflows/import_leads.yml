@@ -23,13 +23,6 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Restaurar IDs já importados
-        uses: actions/cache@v4
-        with:
-          path: processed_ids.json
-          key: processed-ids-${{ github.run_id }}
-          restore-keys: processed-ids-
-
       - name: Importar leads
         env:
           ODOO_URL: ${{ secrets.ODOO_URL }}
@@ -40,10 +33,3 @@ jobs:
           ODOO_STAGE_ID: "17"
           SPREADSHEET_ID: "12UT2WhaIWsjZW-ojJ1Asy6bH3zaTsDLcRdwiKN3D3_I"
         run: python import_leads.py
-
-      - name: Salvar IDs importados
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: processed_ids.json
-          key: processed-ids-${{ github.run_id }}
