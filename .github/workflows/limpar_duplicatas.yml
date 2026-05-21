@@ -1,12 +1,19 @@
-name: Importar Leads Meta Ads → Odoo
+name: Limpar Leads Duplicados no Odoo
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"  # a cada 15 minutos
-  workflow_dispatch:          # permite rodar manualmente pelo GitHub
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Simular sem apagar (true = apenas mostra, false = apaga de verdade)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 jobs:
-  import:
+  limpar:
     runs-on: ubuntu-latest
     environment: automações
 
@@ -23,13 +30,11 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
-      - name: Importar leads
+      - name: Limpar duplicatas
         env:
           ODOO_URL: ${{ secrets.ODOO_URL }}
           ODOO_DB: ${{ secrets.ODOO_DB }}
           ODOO_USER: ${{ secrets.ODOO_USER }}
           ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
-          ODOO_TEAM_ID: "17"
-          ODOO_STAGE_ID: "17"
-          SPREADSHEET_ID: "12UT2WhaIWsjZW-ojJ1Asy6bH3zaTsDLcRdwiKN3D3_I"
-        run: python import_leads.py
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python limpar_duplicatas.py
