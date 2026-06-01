@@ -100,11 +100,12 @@ def get_odoo_stages(models, uid) -> dict[str, int]:
 
 
 def get_odoo_leads(models, uid) -> dict[str, dict]:
+    # active=False inclui arquivados (perdidos); active em qualquer valor = ambos
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
-        [[["description", "like", "Lead ID (Meta):"]]],
-        {"fields": ["id", "name", "stage_id"], "limit": 0},
+        [[["description", "like", "Lead ID (Meta):"], ["active", "in", [True, False]]]],
+        {"fields": ["id", "name", "stage_id", "active"], "limit": 0},
     )
     return {l["name"].strip().lower(): l for l in leads}
 
@@ -143,30 +144,41 @@ def main():
     errors = 0
 
     for deal in pd_deals:
-        title          = (deal.get("title") or "").strip()
-        pd_stage_id    = deal.get("stage_id")
-        pd_stage_name  = pd_stages.get(pd_stage_id, "")
-        stage_date     = deal.get("stage_change_time") or deal.get("add_time")
+        title       = (deal.get("title") or "").strip()
+        pd_status   = deal.get("status", "open")   # open | won | lost
+        pd_stage_id = deal.get("stage_id")
+        pd_stage_name = pd_stages.get(pd_stage_id, "")
 
-        odoo_stage_name = STAGE_MAP.get(pd_stage_name)
-        if not odoo_stage_name:
-            # Stage vazia = deal ganho/perdido no Pipedrive, ignorar silenciosamente
-            if pd_stage_name:
-                log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
-            sem_stage += 1
-            continue
-
-        odoo_stage_id = odoo_stages.get(odoo_stage_name)
-        if not odoo_stage_id:
-            log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
-            sem_stage += 1
-            continue
+        # Determina stage destino e data conforme status do deal no Pipedrive
+        if pd_status == "won":
+            odoo_stage_name = "Ganho"
+            stage_date = deal.get("won_time") or deal.get("stage_change_time")
+            is_lost = False
+        elif pd_status == "lost":
+            odoo_stage_name = "Perdido (arquivado)"   # apenas para o log
+            stage_date = deal.get("lost_time") or deal.get("stage_change_time")
+            is_lost = True
+        else:
+            odoo_stage_name = STAGE_MAP.get(pd_stage_name)
+            stage_date = deal.get("stage_change_time") or deal.get("add_time")
+            is_lost = False
+            if not odoo_stage_name:
+                if pd_stage_name:
+                    log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
+                sem_stage += 1
+                continue
 
         odoo_lead = odoo_leads.get(title.lower())
         if not odoo_lead:
-            log.warning(f"Deal não encontrado no Odoo: '{title}'")
             sem_lead += 1
             continue
+
+        if not is_lost:
+            odoo_stage_id = odoo_stages.get(odoo_stage_name)
+            if not odoo_stage_id:
+                log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
+                sem_stage += 1
+                continue
 
         matched += 1
         current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
@@ -177,9 +189,14 @@ def main():
             continue
 
         try:
-            write_vals = {"stage_id": odoo_stage_id}
-            if stage_date:
-                write_vals["date_last_stage_update"] = stage_date
+            if is_lost:
+                write_vals = {"active": False}
+                if stage_date:
+                    write_vals["date_last_stage_update"] = stage_date
+            else:
+                write_vals = {"stage_id": odoo_stage_id}
+                if stage_date:
+                    write_vals["date_last_stage_update"] = stage_date
 
             models.execute_kw(
                 ODOO_DB, uid, ODOO_API_KEY,
