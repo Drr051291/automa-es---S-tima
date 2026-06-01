@@ -1,0 +1,40 @@
+name: Migrar Leads Existentes para Nova Estrutura
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Simular sem alterar (true = apenas mostra, false = aplica de verdade)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  migrar:
+    runs-on: ubuntu-latest
+    environment: automações
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Migrar leads existentes
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USER: ${{ secrets.ODOO_USER }}
+          ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python migrar_leads_existentes.py
