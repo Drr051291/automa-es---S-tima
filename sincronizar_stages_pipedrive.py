@@ -24,8 +24,9 @@ ODOO_URL        = os.environ["ODOO_URL"]
 ODOO_DB         = os.environ["ODOO_DB"]
 ODOO_USER       = os.environ["ODOO_USER"]
 ODOO_API_KEY    = os.environ["ODOO_API_KEY"]
-PIPEDRIVE_TOKEN = os.environ["PIPEDRIVE_TOKEN"]
-PIPEDRIVE_BASE  = "https://api.pipedrive.com/v1"
+PIPEDRIVE_TOKEN    = os.environ["PIPEDRIVE_TOKEN"]
+PIPEDRIVE_BASE     = "https://api.pipedrive.com/v1"
+PIPEDRIVE_PIPELINE = int(os.environ.get("PIPEDRIVE_PIPELINE_ID", "9"))
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
@@ -43,14 +44,19 @@ def pd_get(endpoint: str, params: dict = None) -> dict:
 
 
 def get_pipedrive_stages() -> dict[int, str]:
-    data = pd_get("stages")
+    data = pd_get("stages", {"pipeline_id": PIPEDRIVE_PIPELINE})
     return {s["id"]: s["name"] for s in (data.get("data") or [])}
 
 
 def get_pipedrive_deals() -> list[dict]:
     deals, start = [], 0
     while True:
-        data = pd_get("deals", {"status": "all_not_deleted", "limit": 500, "start": start})
+        data = pd_get("deals", {
+            "pipeline_id": PIPEDRIVE_PIPELINE,
+            "status": "all_not_deleted",
+            "limit": 500,
+            "start": start,
+        })
         items = data.get("data") or []
         deals.extend(items)
         pagination = (data.get("additional_data") or {}).get("pagination", {})
