@@ -99,15 +99,19 @@ def get_odoo_stages(models, uid) -> dict[str, int]:
     return {s["name"]: s["id"] for s in stages}
 
 
-def get_odoo_leads(models, uid) -> dict[str, dict]:
-    # active=False inclui arquivados (perdidos); active em qualquer valor = ambos
+def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
+    # active=False inclui arquivados; retorna lista para tratar duplicatas de nome
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
         [[["description", "like", "Lead ID (Meta):"], ["active", "in", [True, False]]]],
         {"fields": ["id", "name", "stage_id", "active"], "limit": 0},
     )
-    return {l["name"].strip().lower(): l for l in leads}
+    result: dict[str, list[dict]] = {}
+    for l in leads:
+        key = l["name"].strip().lower()
+        result.setdefault(key, []).append(l)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +171,8 @@ def main():
                 sem_stage += 1
                 continue
 
-        odoo_lead = odoo_leads.get(title.lower())
-        if not odoo_lead:
+        odoo_lead_list = odoo_leads.get(title.lower())
+        if not odoo_lead_list:
             sem_lead += 1
             continue
 
@@ -178,29 +182,30 @@ def main():
             sem_stage += 1
             continue
 
-        matched += 1
-        current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
-        log.info(f"'{title}' | {current} → {odoo_stage_name} ({stage_date})")
+        matched += len(odoo_lead_list)
+        for odoo_lead in odoo_lead_list:
+            current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
+            log.info(f"'{title}' (#{odoo_lead['id']}) | {current} → {odoo_stage_name} ({stage_date})")
 
-        if DRY_RUN:
-            updated += 1
-            continue
+            if DRY_RUN:
+                updated += 1
+                continue
 
-        try:
-            write_vals = {"stage_id": odoo_stage_id}
-            if stage_date:
-                write_vals["date_last_stage_update"] = stage_date
+            try:
+                write_vals = {"stage_id": odoo_stage_id}
+                if stage_date:
+                    write_vals["date_last_stage_update"] = stage_date
 
-            models.execute_kw(
-                ODOO_DB, uid, ODOO_API_KEY,
-                "crm.lead", "write",
-                [[odoo_lead["id"]], write_vals],
-            )
-            log.info(f"  Atualizado: Odoo#{odoo_lead['id']}")
-            updated += 1
-        except Exception as exc:
-            log.error(f"  Erro ao atualizar '{title}': {exc}")
-            errors += 1
+                models.execute_kw(
+                    ODOO_DB, uid, ODOO_API_KEY,
+                    "crm.lead", "write",
+                    [[odoo_lead["id"]], write_vals],
+                )
+                log.info(f"  Atualizado: Odoo#{odoo_lead['id']}")
+                updated += 1
+            except Exception as exc:
+                log.error(f"  Erro ao atualizar '{title}' #{odoo_lead['id']}: {exc}")
+                errors += 1
 
     log.info("=" * 60)
     log.info(f"Total Pipedrive: {len(pd_deals)} | Matched: {matched} | "
