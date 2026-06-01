@@ -96,9 +96,35 @@ LEAD_PROPERTIES_MAP = {
 }
 
 
-def build_lead_vals(row: dict) -> dict:
-    phone = row.get("phone_number", "").strip().replace("p:", "").strip()
+def create_or_find_contact(models, uid, name: str, email: str, phone: str) -> int:
+    """Cria um contato no Odoo ou retorna o ID de um já existente (busca por e-mail)."""
+    if email:
+        existing = models.execute_kw(
+            ODOO_DB, uid, ODOO_API_KEY,
+            "res.partner", "search_read",
+            [[["email", "=", email]]],
+            {"fields": ["id", "name"], "limit": 1},
+        )
+        if existing:
+            log.info(f"Contato já existe: res.partner#{existing[0]['id']} | {existing[0]['name']}")
+            return existing[0]["id"]
 
+    contact_vals = {"name": name or "Contato Meta Ads"}
+    if email:
+        contact_vals["email"] = email
+    if phone:
+        contact_vals["phone"] = phone
+
+    partner_id = models.execute_kw(
+        ODOO_DB, uid, ODOO_API_KEY,
+        "res.partner", "create",
+        [contact_vals],
+    )
+    log.info(f"Contato criado: res.partner#{partner_id} | {contact_vals['name']}")
+    return partner_id
+
+
+def build_lead_vals(row: dict, partner_id: int) -> dict:
     description = "\n".join([
         f"Lead ID (Meta): {row.get('id', '')}",
         f"Data de criacao (Meta): {row.get('created_time', '')}",
@@ -110,12 +136,11 @@ def build_lead_vals(row: dict) -> dict:
         for hash_key, col in LEAD_PROPERTIES_MAP.items()
     ]
 
+    company_name = row.get("company_name", "").strip()
+
     vals = {
-        "name": row.get("full_name", "").strip() or "Lead Meta Ads",
-        "contact_name": row.get("full_name", "").strip(),
-        "email_from": row.get("email", "").strip(),
-        "phone": phone,
-        "partner_name": row.get("company_name", "").strip(),
+        "name": company_name or row.get("full_name", "").strip() or "Lead Meta Ads",
+        "partner_id": partner_id,
         "description": description,
         "type": "opportunity",
         "team_id": ODOO_TEAM_ID,
@@ -165,9 +190,14 @@ def main():
     for row in new_records:
         meta_id = row.get("id", "")
         try:
-            vals = build_lead_vals(row)
+            name = row.get("full_name", "").strip()
+            email = row.get("email", "").strip()
+            phone = row.get("phone_number", "").strip().replace("p:", "").strip()
+
+            partner_id = create_or_find_contact(models, uid, name, email, phone)
+            vals = build_lead_vals(row, partner_id)
             lead_id = create_lead(models, uid, vals)
-            log.info(f"Lead criado: Odoo#{lead_id} | {vals.get('name')} | Meta ID: {meta_id}")
+            log.info(f"Negócio criado: Odoo#{lead_id} | {vals.get('name')} | Contato: {name} | Meta ID: {meta_id}")
             imported += 1
         except Exception as exc:
             log.error(f"Erro ao criar lead Meta ID {meta_id}: {exc}")
