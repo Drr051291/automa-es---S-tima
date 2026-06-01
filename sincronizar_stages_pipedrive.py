@@ -155,13 +155,12 @@ def main():
             stage_date = deal.get("won_time") or deal.get("stage_change_time")
             is_lost = False
         elif pd_status == "lost":
-            odoo_stage_name = "Perdido (arquivado)"   # apenas para o log
+            odoo_stage_name = "Perdido"
             stage_date = deal.get("lost_time") or deal.get("stage_change_time")
-            is_lost = True
+            is_lost = False
         else:
             odoo_stage_name = STAGE_MAP.get(pd_stage_name)
             stage_date = deal.get("stage_change_time") or deal.get("add_time")
-            is_lost = False
             if not odoo_stage_name:
                 if pd_stage_name:
                     log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
@@ -173,12 +172,11 @@ def main():
             sem_lead += 1
             continue
 
-        if not is_lost:
-            odoo_stage_id = odoo_stages.get(odoo_stage_name)
-            if not odoo_stage_id:
-                log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
-                sem_stage += 1
-                continue
+        odoo_stage_id = odoo_stages.get(odoo_stage_name)
+        if not odoo_stage_id:
+            log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
+            sem_stage += 1
+            continue
 
         matched += 1
         current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
@@ -189,14 +187,9 @@ def main():
             continue
 
         try:
-            if is_lost:
-                write_vals = {"active": False}
-                if stage_date:
-                    write_vals["date_last_stage_update"] = stage_date
-            else:
-                write_vals = {"stage_id": odoo_stage_id}
-                if stage_date:
-                    write_vals["date_last_stage_update"] = stage_date
+            write_vals = {"stage_id": odoo_stage_id}
+            if stage_date:
+                write_vals["date_last_stage_update"] = stage_date
 
             models.execute_kw(
                 ODOO_DB, uid, ODOO_API_KEY,
