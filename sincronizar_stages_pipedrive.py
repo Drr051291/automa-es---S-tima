@@ -28,6 +28,17 @@ PIPEDRIVE_TOKEN    = os.environ["PIPEDRIVE_TOKEN"]
 PIPEDRIVE_BASE     = "https://api.pipedrive.com/v1"
 PIPEDRIVE_PIPELINE = int(os.environ.get("PIPEDRIVE_PIPELINE_ID", "9"))
 
+# Mapeamento: nome da stage no Pipedrive → nome exato no Odoo
+# Deals ganhos/perdidos no Pipedrive não entram no kanban e são ignorados.
+STAGE_MAP = {
+    "Lead":              "ID Oportunidade",
+    "MQL":               "MQL",
+    "SQL (Call Agendada)": "SQL",
+    "Show  room":        "Visita Showroom",
+    "Oportunidade":      "Oportunidade",
+    "Negociação":        "Negociação",
+}
+
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
 
@@ -137,9 +148,17 @@ def main():
         pd_stage_name  = pd_stages.get(pd_stage_id, "")
         stage_date     = deal.get("stage_change_time") or deal.get("add_time")
 
-        odoo_stage_id = odoo_stages.get(pd_stage_name)
+        odoo_stage_name = STAGE_MAP.get(pd_stage_name)
+        if not odoo_stage_name:
+            # Stage vazia = deal ganho/perdido no Pipedrive, ignorar silenciosamente
+            if pd_stage_name:
+                log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
+            sem_stage += 1
+            continue
+
+        odoo_stage_id = odoo_stages.get(odoo_stage_name)
         if not odoo_stage_id:
-            log.warning(f"Stage '{pd_stage_name}' não encontrada no Odoo — '{title}'")
+            log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
             sem_stage += 1
             continue
 
@@ -151,7 +170,7 @@ def main():
 
         matched += 1
         current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
-        log.info(f"'{title}' | {current} → {pd_stage_name} ({stage_date})")
+        log.info(f"'{title}' | {current} → {odoo_stage_name} ({stage_date})")
 
         if DRY_RUN:
             updated += 1
