@@ -34,23 +34,22 @@ pipelines = models.execute_kw(ODOO_DB, uid, ODOO_API_KEY,
 for p in pipelines:
     print(f"  ID={p['id']:>4}  →  {p['name']}")
 
-# Estágios
+# Estágios (Odoo 19 não tem team_id em crm.stage)
 print("\n" + "=" * 50)
 print("ESTÁGIOS")
 print("=" * 50)
 stages = models.execute_kw(ODOO_DB, uid, ODOO_API_KEY,
-    "crm.stage", "search_read", [[]], {"fields": ["id", "name", "team_id"], "order": "sequence"})
+    "crm.stage", "search_read", [[]], {"fields": ["id", "name"], "order": "sequence"})
 for s in stages:
-    team = s["team_id"][1] if s["team_id"] else "todos os pipelines"
-    print(f"  ID={s['id']:>4}  →  {s['name']}  [{team}]")
+    print(f"  ID={s['id']:>4}  →  {s['name']}")
 
-# Busca um lead existente no pipeline Sétima para extrair os hashes das properties
+# Busca um lead existente no pipeline Inbound Sétima (ID=16) para extrair hashes
 print("\n" + "=" * 50)
-print("HASHES DAS PROPRIEDADES (pipeline Sétima)")
+print("HASHES DAS PROPRIEDADES (pipeline Inbound Sétima)")
 print("=" * 50)
 leads = models.execute_kw(ODOO_DB, uid, ODOO_API_KEY,
     "crm.lead", "search_read",
-    [[["team_id.name", "ilike", "tima"]]],
+    [[["team_id", "=", 16]]],
     {"fields": ["name", "lead_properties"], "limit": 5},
 )
 
