@@ -1,0 +1,30 @@
+name: Descobrir IDs e Properties - Sétima
+
+on:
+  workflow_dispatch:
+
+jobs:
+  descobrir:
+    runs-on: ubuntu-latest
+    environment: automações
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Descobrir IDs e properties
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USER: ${{ secrets.ODOO_USER }}
+          ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
+        run: python descobrir_propriedades_setima.py
