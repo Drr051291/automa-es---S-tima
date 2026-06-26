@@ -32,11 +32,12 @@ DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
 # Mapeamento: nome da stage no Pipedrive → nome exato no Odoo
 STAGE_MAP = {
-    "Lead":        "Leads",
-    "MQL":         "MQL",
-    "Discovery":   "Discovery",
-    "SQL":         "SQL",
+    "Lead":         "Lead",
+    "MQL":          "MQL",
+    "Discovery":    "Discovery",
+    "SQL":          "SQL",
     "Oportunidade": "Oportunidade",
+    "Negociação":   "Negociação",
 }
 
 

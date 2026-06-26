@@ -32,11 +32,12 @@ ODOO_TEAM_ID       = int(os.environ.get("ODOO_TEAM_ID_SETIMA", "16"))
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
 STAGE_MAP = {
-    "Lead":         "Leads",
+    "Lead":         "Lead",
     "MQL":          "MQL",
     "Discovery":    "Discovery",
     "SQL":          "SQL",
     "Oportunidade": "Oportunidade",
+    "Negociação":   "Negociação",
 }
 
 
