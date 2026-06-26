@@ -27,6 +27,7 @@ ODOO_API_KEY    = os.environ["ODOO_API_KEY"]
 PIPEDRIVE_TOKEN    = os.environ["PIPEDRIVE_TOKEN"]
 PIPEDRIVE_BASE     = "https://api.pipedrive.com/v1"
 PIPEDRIVE_PIPELINE = int(os.environ.get("PIPEDRIVE_PIPELINE_ID", "9"))
+ODOO_TEAM_ID       = int(os.environ.get("ODOO_TEAM_ID", "17"))
 
 # Mapeamento: nome da stage no Pipedrive → nome exato no Odoo
 # Deals ganhos/perdidos no Pipedrive não entram no kanban e são ignorados.
@@ -34,7 +35,7 @@ STAGE_MAP = {
     "Lead":              "ID Oportunidade",
     "MQL":               "MQL",
     "SQL (Call Agendada)": "SQL",
-    "Show  room":        "Visita Showroom",
+    "Show room":         "Visita Showroom",
     "Oportunidade":      "Oportunidade",
     "Negociação":        "Negociação",
 }
@@ -104,7 +105,11 @@ def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
-        [[["description", "like", "Lead ID (Meta):"], ["active", "in", [True, False]]]],
+        [[
+            ["description", "like", "Lead ID (Meta):"],
+            ["team_id", "=", ODOO_TEAM_ID],
+            ["active", "in", [True, False]],
+        ]],
         {"fields": ["id", "name", "stage_id", "active"], "limit": 0},
     )
     result: dict[str, list[dict]] = {}
@@ -157,7 +162,6 @@ def main():
         if pd_status == "won":
             odoo_stage_name = "Ganho"
             stage_date = deal.get("won_time") or deal.get("stage_change_time")
-            is_lost = False
         elif pd_status == "lost":
             odoo_stage_name = "Perdido"
             stage_date = deal.get("lost_time") or deal.get("stage_change_time")
