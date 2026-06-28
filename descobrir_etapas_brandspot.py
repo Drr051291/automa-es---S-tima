@@ -5,7 +5,7 @@ Lista as etapas atuais nos dois CRMs (Pipedrive pipeline 9 e Odoo) via API.
 Não cria, não altera e não apaga nada.
 
 Execute via workflow ou local: python3 descobrir_etapas_brandspot.py
-(re-checagem pos-ajustes manuais do usuario - rev2)
+(re-checagem pos-apply da sincronizacao - rev3)
 """
 
 import os
