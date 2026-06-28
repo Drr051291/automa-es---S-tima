@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """
-Migração única: sincroniza stages do Pipedrive → Odoo.
-Lê a stage atual de cada deal no Pipedrive + data de entrada,
-faz match pelo nome da empresa (título do negócio) e atualiza o Odoo.
+Sincroniza o pipe BrandSpot do Pipedrive (pipeline 9) -> Odoo (equipe 17).
+
+De-para POR ID (robusto a renomeações/typos dos dois lados):
+  Pipedrive stage_id  ->  Odoo stage_id
+
+Tratamento de status do deal no Pipedrive:
+  - open  -> move para a etapa mapeada (ativo)
+  - won   -> move para a etapa "Ganho" (ativo)
+  - lost  -> marca como PERDIDO via status (active=False, probability=0),
+             PRESERVANDO a etapa onde o lead estava quando foi perdido
+             (assim dá para medir conversão/perda etapa a etapa).
+
+Faz match do deal com o lead do Odoo pelo título (nome da empresa), entre os
+leads da equipe BrandSpot importados do Meta. Leads de Landing Page ainda não
+entram no Odoo (integração em standby), então não são casados aqui.
 """
 
 import logging
@@ -29,18 +41,21 @@ PIPEDRIVE_BASE     = "https://api.pipedrive.com/v1"
 PIPEDRIVE_PIPELINE = int(os.environ.get("PIPEDRIVE_PIPELINE_ID", "9"))
 ODOO_TEAM_ID       = int(os.environ.get("ODOO_TEAM_ID", "17"))
 
-# Mapeamento: nome da stage no Pipedrive → nome exato no Odoo
-# Deals ganhos/perdidos no Pipedrive não entram no kanban e são ignorados.
-STAGE_MAP = {
-    "Lead":              "ID Oportunidade",
-    "MQL":               "MQL",
-    "SQL (Call Agendada)": "SQL",
-    "Show room":         "Visita Showroom",
-    "Oportunidade":      "Oportunidade",
-    "Negociação":        "Negociação",
+DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
+
+# -------------------------------------------------------------------------
+# De-para POR ID: Pipedrive stage_id (pipeline 9) -> Odoo crm.stage id
+# -------------------------------------------------------------------------
+PD_STAGE_TO_ODOO = {
+    43: 68,   # Lead                -> Lead
+    48: 51,   # MQL                 -> MQL
+    49: 52,   # SQL (Call Agendada) -> SQL
+    39: 63,   # Show  room          -> Visita Showroom
+    75: 17,   # Oportuindade        -> Oportunidade
+    40: 71,   # Negociação          -> Negociação
 }
 
-DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
+ODOO_STAGE_GANHO = 4   # etapa "Ganho" (is_won) para deals ganhos no Pipedrive
 
 
 # ---------------------------------------------------------------------------
@@ -53,11 +68,6 @@ def pd_get(endpoint: str, params: dict = None) -> dict:
     r = requests.get(f"{PIPEDRIVE_BASE}/{endpoint}", params=params, timeout=30)
     r.raise_for_status()
     return r.json()
-
-
-def get_pipedrive_stages() -> dict[int, str]:
-    data = pd_get("stages", {"pipeline_id": PIPEDRIVE_PIPELINE})
-    return {s["id"]: s["name"] for s in (data.get("data") or [])}
 
 
 def get_pipedrive_deals() -> list[dict]:
@@ -90,18 +100,8 @@ def odoo_connect():
     return xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object"), uid
 
 
-def get_odoo_stages(models, uid) -> dict[str, int]:
-    stages = models.execute_kw(
-        ODOO_DB, uid, ODOO_API_KEY,
-        "crm.stage", "search_read",
-        [[]],
-        {"fields": ["id", "name"]},
-    )
-    return {s["name"]: s["id"] for s in stages}
-
-
 def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
-    # active=False inclui arquivados; retorna lista para tratar duplicatas de nome
+    """Leads BrandSpot vindos do Meta, agrupados por nome (inclui arquivados)."""
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
@@ -123,82 +123,81 @@ def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
 # Main
 # ---------------------------------------------------------------------------
 
+def resolve_target(deal: dict) -> tuple[int | None, bool, str | None]:
+    """Retorna (odoo_stage_id, ativo, data) para o deal.
+
+    - odoo_stage_id None => não mexer na etapa (caso de lost sem mapeamento).
+    - ativo False => marcar como perdido (status).
+    """
+    pd_status   = deal.get("status", "open")
+    pd_stage_id = deal.get("stage_id")
+    mapped      = PD_STAGE_TO_ODOO.get(pd_stage_id)
+
+    if pd_status == "won":
+        return ODOO_STAGE_GANHO, True, (deal.get("won_time") or deal.get("stage_change_time"))
+
+    if pd_status == "lost":
+        # Perdido como STATUS: arquiva e preserva a etapa de origem (se mapeada).
+        return mapped, False, (deal.get("lost_time") or deal.get("stage_change_time"))
+
+    # open
+    return mapped, True, (deal.get("stage_change_time") or deal.get("add_time"))
+
+
 def main():
     if DRY_RUN:
         log.info("=== MODO SIMULAÇÃO (DRY_RUN=true) — nada será alterado ===")
     else:
-        log.info("=== MODO REAL — stages serão atualizados no Odoo ===")
+        log.info("=== MODO REAL — leads serão atualizados no Odoo ===")
 
-    log.info("Buscando stages do Pipedrive...")
-    pd_stages = get_pipedrive_stages()
-    log.info(f"{len(pd_stages)} stage(s): {list(pd_stages.values())}")
-
-    log.info("Buscando deals do Pipedrive...")
+    log.info(f"Buscando deals do Pipedrive (pipeline {PIPEDRIVE_PIPELINE} - BrandSpot)...")
     pd_deals = get_pipedrive_deals()
     log.info(f"{len(pd_deals)} deal(s) encontrado(s).")
 
     log.info("Conectando ao Odoo...")
     models, uid = odoo_connect()
-
-    odoo_stages = get_odoo_stages(models, uid)
-    log.info(f"Stages Odoo: {list(odoo_stages.keys())}")
-
     odoo_leads = get_odoo_leads(models, uid)
-    log.info(f"{len(odoo_leads)} oportunidade(s) Meta Ads no Odoo.")
+    log.info(f"{len(odoo_leads)} oportunidade(s) BrandSpot (Meta) no Odoo.")
 
-    matched = 0
-    sem_stage = 0
-    sem_lead = 0
-    updated = 0
-    errors = 0
+    matched = sem_lead = sem_stage = updated = errors = 0
 
     for deal in pd_deals:
-        title       = (deal.get("title") or "").strip()
-        pd_status   = deal.get("status", "open")   # open | won | lost
-        pd_stage_id = deal.get("stage_id")
-        pd_stage_name = pd_stages.get(pd_stage_id, "")
+        title = (deal.get("title") or "").strip()
+        pd_status = deal.get("status", "open")
+        odoo_stage_id, ativo, stage_date = resolve_target(deal)
 
-        # Determina stage destino e data conforme status do deal no Pipedrive
-        if pd_status == "won":
-            odoo_stage_name = "Ganho"
-            stage_date = deal.get("won_time") or deal.get("stage_change_time")
-        elif pd_status == "lost":
-            odoo_stage_name = "Perdido"
-            stage_date = deal.get("lost_time") or deal.get("stage_change_time")
-            is_lost = False
-        else:
-            odoo_stage_name = STAGE_MAP.get(pd_stage_name)
-            stage_date = deal.get("stage_change_time") or deal.get("add_time")
-            if not odoo_stage_name:
-                if pd_stage_name:
-                    log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
-                sem_stage += 1
-                continue
+        # Deal aberto cuja etapa não está mapeada: não sabemos para onde mover.
+        if pd_status == "open" and odoo_stage_id is None:
+            log.warning(f"Stage Pipedrive {deal.get('stage_id')} sem mapeamento — '{title}'")
+            sem_stage += 1
+            continue
 
         odoo_lead_list = odoo_leads.get(title.lower())
         if not odoo_lead_list:
             sem_lead += 1
             continue
 
-        odoo_stage_id = odoo_stages.get(odoo_stage_name)
-        if not odoo_stage_id:
-            log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
-            sem_stage += 1
-            continue
-
         matched += len(odoo_lead_list)
         for odoo_lead in odoo_lead_list:
-            current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
-            log.info(f"'{title}' (#{odoo_lead['id']}) | {current} → {odoo_stage_name} ({stage_date})")
+            atual = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
+            destino = odoo_stage_id if odoo_stage_id is not None else atual
+            estado = "PERDIDO(arquiva)" if not ativo else "ativo"
+            log.info(f"'{title}' (#{odoo_lead['id']}) | {atual} -> stage={destino} [{estado}] ({stage_date})")
 
             if DRY_RUN:
                 updated += 1
                 continue
 
             try:
-                write_vals = {"stage_id": odoo_stage_id}
+                write_vals: dict = {"active": ativo}
+                if odoo_stage_id is not None:
+                    write_vals["stage_id"] = odoo_stage_id
                 if stage_date:
                     write_vals["date_last_stage_update"] = stage_date
+                if pd_status == "lost":
+                    write_vals["probability"] = 0
+                elif pd_status == "won":
+                    write_vals["probability"] = 100
 
                 models.execute_kw(
                     ODOO_DB, uid, ODOO_API_KEY,
