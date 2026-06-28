@@ -31,7 +31,7 @@ ODOO_DB       = os.environ["ODOO_DB"]
 ODOO_USER     = os.environ["ODOO_USER"]
 ODOO_API_KEY  = os.environ["ODOO_API_KEY"]
 ODOO_TEAM_ID  = int(os.environ.get("ODOO_TEAM_ID", "17"))
-ODOO_STAGE_ID = int(os.environ.get("ODOO_STAGE_ID", "17"))
+ODOO_STAGE_ID = int(os.environ.get("ODOO_STAGE_ID", "68"))  # etapa inicial "Lead"
 
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "12UT2WhaIWsjZW-ojJ1Asy6bH3zaTsDLcRdwiKN3D3_I")
 SHEETS_CSV_URL = (

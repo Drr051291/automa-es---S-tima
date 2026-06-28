@@ -30,6 +30,6 @@ jobs:
           ODOO_USER: ${{ secrets.ODOO_USER }}
           ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
           ODOO_TEAM_ID: "17"
-          ODOO_STAGE_ID: "17"
+          ODOO_STAGE_ID: "68"   # etapa inicial "Lead" (antes estava 17 = Oportunidade, errado)
           SPREADSHEET_ID: "12UT2WhaIWsjZW-ojJ1Asy6bH3zaTsDLcRdwiKN3D3_I"
         run: python import_leads.py
