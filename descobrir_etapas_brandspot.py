@@ -68,13 +68,47 @@ for t in teams:
     print(f"  ID={t['id']:>4}  ->  {t['name']}")
 
 print("\n" + "=" * 60)
-print("ODOO — ETAPAS (crm.stage) — globais, ordenadas por sequence")
+print("ODOO — campos disponiveis em crm.stage")
 print("=" * 60)
+fields = models.execute_kw(ODOO_DB, uid, ODOO_API_KEY,
+    "crm.stage", "fields_get", [], {"attributes": ["string"]})
+tem_team = "team_id" in fields
+print(f"  crm.stage tem campo team_id? {tem_team}")
+
+print("\n" + "=" * 60)
+print("ODOO — ETAPAS (crm.stage), ordenadas por sequence")
+print("=" * 60)
+read_fields = ["id", "name", "sequence", "is_won", "fold"]
+if tem_team:
+    read_fields.append("team_id")
 ostages = models.execute_kw(ODOO_DB, uid, ODOO_API_KEY,
     "crm.stage", "search_read", [[]],
-    {"fields": ["id", "name", "sequence"], "order": "sequence"})
+    {"fields": read_fields, "order": "sequence"})
 for s in ostages:
-    print(f"  seq={s.get('sequence'):>3}  ID={s['id']:>4}  ->  [{s['name']}]")
+    team = ""
+    if tem_team:
+        team = f"  team={s['team_id'][1] if s.get('team_id') else 'GLOBAL (todos os funis)'}"
+    won = "  [GANHO]" if s.get("is_won") else ""
+    fold = "  (dobrada)" if s.get("fold") else ""
+    print(f"  seq={s.get('sequence'):>3}  ID={s['id']:>4}  ->  [{s['name']}]{won}{fold}{team}")
+
+# Quantos leads (todos os times) existem em cada etapa — para saber se etapas
+# 'extras' do BrandSpot sao usadas por outros funis antes de cogitar exclusao.
+print("\n" + "=" * 60)
+print("ODOO — Total de leads POR ETAPA e POR EQUIPE (todos os funis)")
+print("=" * 60)
+try:
+    grp = models.execute_kw(ODOO_DB, uid, ODOO_API_KEY,
+        "crm.lead", "read_group",
+        [[["active", "in", [True, False]]]],
+        {"fields": ["stage_id", "team_id"],
+         "groupby": ["stage_id", "team_id"], "lazy": False})
+    for g in grp:
+        st = g["stage_id"][1] if g.get("stage_id") else "(sem etapa)"
+        tm = g["team_id"][1] if g.get("team_id") else "(sem equipe)"
+        print(f"  {g['__count']:>5}  ->  etapa [{st}]  |  equipe [{tm}]")
+except Exception as exc:
+    print(f"  (nao foi possivel agrupar: {exc})")
 
 # Contagem de oportunidades por etapa na equipe BrandSpot (id 17) — só leitura
 print("\n" + "=" * 60)
