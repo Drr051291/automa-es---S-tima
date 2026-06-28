@@ -50,6 +50,34 @@ for s in sorted(stages, key=lambda x: x.get("order_nr", 0)):
     print(f"  ordem={s.get('order_nr'):>2}  ID={s['id']:>4}  ->  [{s['name']}]")
 
 print("\n" + "=" * 60)
+print("PIPEDRIVE — TODAS as etapas (todos os pipelines)")
+print("=" * 60)
+all_stages = pd_get("stages").get("data") or []
+stage_name_by_id = {s["id"]: s["name"] for s in all_stages}
+for s in sorted(all_stages, key=lambda x: (x.get("pipeline_id", 0), x.get("order_nr", 0))):
+    print(f"  pipeline={s.get('pipeline_id'):>3}  ID={s['id']:>4}  ->  [{s['name']}]")
+
+print("\n" + "=" * 60)
+print(f"PIPEDRIVE — Contagem de negócios por etapa/status (pipeline {PIPEDRIVE_PIPELINE})")
+print("=" * 60)
+deals, start = [], 0
+while True:
+    data = pd_get("deals", {"pipeline_id": PIPEDRIVE_PIPELINE,
+                            "status": "all_not_deleted", "limit": 500, "start": start})
+    items = data.get("data") or []
+    deals.extend(items)
+    pag = (data.get("additional_data") or {}).get("pagination", {})
+    if not pag.get("more_items_in_collection"):
+        break
+    start = pag["next_start"]
+counts: dict = {}
+for d in deals:
+    key = (d.get("stage_id"), d.get("status"))
+    counts[key] = counts.get(key, 0) + 1
+for (sid, status), n in sorted(counts.items(), key=lambda x: -x[1]):
+    print(f"  {n:>5}  stage_id={sid} [{stage_name_by_id.get(sid, '???')}]  status={status}")
+
+print("\n" + "=" * 60)
 print("ODOO — CONEXÃO")
 print("=" * 60)
 common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
