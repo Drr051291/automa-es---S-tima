@@ -107,12 +107,18 @@ def odoo_connect():
 
 
 def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
-    """Leads BrandSpot vindos do Meta, agrupados por nome (inclui arquivados)."""
+    """Leads BrandSpot (Meta + migrados do Pipedrive), agrupados por nome.
+
+    Inclui tanto os vindos do Meta ("Lead ID (Meta):") quanto os migrados do
+    Pipedrive ("Pipedrive ID:"), para que ambos sigam sincronizando por título.
+    """
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
         [[
+            "|",
             ["description", "like", "Lead ID (Meta):"],
+            ["description", "like", "Pipedrive ID:"],
             ["team_id", "=", ODOO_TEAM_ID],
             ["active", "in", [True, False]],
         ]],
