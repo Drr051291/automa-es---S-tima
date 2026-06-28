@@ -71,6 +71,12 @@ def pd_get(endpoint: str, params: dict = None) -> dict:
 
 
 def get_pipedrive_deals() -> list[dict]:
+    """Retorna SÓ os deals do pipeline BrandSpot.
+
+    Atenção: o parâmetro `pipeline_id` em /v1/deals é ignorado pela API
+    (devolve deals de todos os pipelines), então filtramos no cliente pelo
+    campo `pipeline_id` de cada deal.
+    """
     deals, start = [], 0
     while True:
         data = pd_get("deals", {
@@ -85,7 +91,7 @@ def get_pipedrive_deals() -> list[dict]:
         if not pagination.get("more_items_in_collection"):
             break
         start = pagination["next_start"]
-    return deals
+    return [d for d in deals if d.get("pipeline_id") == PIPEDRIVE_PIPELINE]
 
 
 # ---------------------------------------------------------------------------
