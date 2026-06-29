@@ -147,24 +147,6 @@ def get_existing_pd_ids(models, uid) -> set[str]:
     return ids
 
 
-def create_or_find_contact(models, uid, name: str, email: str, phone: str) -> int | None:
-    if email:
-        existing = models.execute_kw(
-            ODOO_DB, uid, ODOO_API_KEY, "res.partner", "search_read",
-            [[["email", "=", email]]], {"fields": ["id"], "limit": 1},
-        )
-        if existing:
-            return existing[0]["id"]
-    if not (name or email or phone):
-        return None
-    vals = {"name": name or "Contato Pipedrive"}
-    if email:
-        vals["email"] = email
-    if phone:
-        vals["phone"] = phone
-    return models.execute_kw(ODOO_DB, uid, ODOO_API_KEY, "res.partner", "create", [vals])
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -218,12 +200,12 @@ def main():
             continue
 
         try:
-            partner_id = create_or_find_contact(models, uid, person_name, email, phone)
             description = "\n".join([
                 f"Pipedrive ID: {pd_id}",
                 "Origem: Pipedrive (migração BrandSpot)",
                 f"Data de entrada na etapa: {stage_date or ''}",
             ])
+            # Não cria res.partner: dados de contato ficam no próprio negócio.
             vals = {
                 "name": nome_lead,
                 "type": "opportunity",
@@ -232,9 +214,7 @@ def main():
                 "description": description,
                 "active": ativo,
             }
-            if partner_id:
-                vals["partner_id"] = partner_id
-            elif person_name:
+            if person_name:
                 vals["contact_name"] = person_name
             if email:
                 vals["email_from"] = email
