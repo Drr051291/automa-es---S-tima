@@ -19,6 +19,7 @@ entram no Odoo (integração em standby), então não são casados aqui.
 
 import logging
 import os
+import re
 import xmlrpc.client
 
 import requests
@@ -106,11 +107,32 @@ def odoo_connect():
     return xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object"), uid
 
 
-def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
-    """Leads BrandSpot (Meta + migrados do Pipedrive), agrupados por nome.
+def _norm_phone(p: str) -> str:
+    """Só dígitos; usa os últimos 9 (ignora DDI/zeros à esquerda)."""
+    digits = re.sub(r"\D", "", p or "")
+    return digits[-9:] if len(digits) >= 9 else digits
+
+
+def extract_person_info(deal: dict) -> tuple[str, str]:
+    """Email e telefone da pessoa ligada ao deal."""
+    person = deal.get("person_id") or {}
+    emails = person.get("email", []) if isinstance(person, dict) else []
+    email = next((e["value"] for e in emails if e.get("primary")), "")
+    if not email and emails:
+        email = emails[0].get("value", "")
+    phones = person.get("phone", []) if isinstance(person, dict) else []
+    phone = next((p["value"] for p in phones if p.get("primary")), "")
+    if not phone and phones:
+        phone = phones[0].get("value", "")
+    return (email or "").strip().lower(), (phone or "").strip()
+
+
+def get_odoo_lead_indexes(models, uid) -> tuple[dict, dict, dict]:
+    """Leads BrandSpot (Meta + migrados do Pipedrive) indexados por
+    título, e-mail e telefone — para casar mesmo quando o título diverge.
 
     Inclui tanto os vindos do Meta ("Lead ID (Meta):") quanto os migrados do
-    Pipedrive ("Pipedrive ID:"), para que ambos sigam sincronizando por título.
+    Pipedrive ("Pipedrive ID:").
     """
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
@@ -122,13 +144,22 @@ def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
             ["team_id", "=", ODOO_TEAM_ID],
             ["active", "in", [True, False]],
         ]],
-        {"fields": ["id", "name", "stage_id", "active"], "limit": 0},
+        {"fields": ["id", "name", "stage_id", "active", "email_from", "phone"], "limit": 0},
     )
-    result: dict[str, list[dict]] = {}
+    by_title: dict[str, list[dict]] = {}
+    by_email: dict[str, list[dict]] = {}
+    by_phone: dict[str, list[dict]] = {}
     for l in leads:
-        key = l["name"].strip().lower()
-        result.setdefault(key, []).append(l)
-    return result
+        t = (l.get("name") or "").strip().lower()
+        if t:
+            by_title.setdefault(t, []).append(l)
+        e = (l.get("email_from") or "").strip().lower()
+        if e:
+            by_email.setdefault(e, []).append(l)
+        ph = _norm_phone(l.get("phone"))
+        if ph:
+            by_phone.setdefault(ph, []).append(l)
+    return by_title, by_email, by_phone
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +199,12 @@ def main():
 
     log.info("Conectando ao Odoo...")
     models, uid = odoo_connect()
-    odoo_leads = get_odoo_leads(models, uid)
-    log.info(f"{len(odoo_leads)} oportunidade(s) BrandSpot (Meta) no Odoo.")
+    by_title, by_email, by_phone = get_odoo_lead_indexes(models, uid)
+    log.info("Índices Odoo: "
+             f"{len(by_title)} título(s), {len(by_email)} e-mail(s), {len(by_phone)} telefone(s).")
 
     matched = sem_lead = sem_stage = updated = errors = 0
+    match_por = {"titulo": 0, "email": 0, "telefone": 0}
 
     for deal in pd_deals:
         title = (deal.get("title") or "").strip()
@@ -184,17 +217,27 @@ def main():
             sem_stage += 1
             continue
 
-        odoo_lead_list = odoo_leads.get(title.lower())
+        # Casa por título; se não achar, tenta por e-mail; depois por telefone.
+        email, phone = extract_person_info(deal)
+        odoo_lead_list, via = [], None
+        if title and by_title.get(title.lower()):
+            odoo_lead_list, via = by_title[title.lower()], "titulo"
+        elif email and by_email.get(email):
+            odoo_lead_list, via = by_email[email], "email"
+        elif _norm_phone(phone) and by_phone.get(_norm_phone(phone)):
+            odoo_lead_list, via = by_phone[_norm_phone(phone)], "telefone"
+
         if not odoo_lead_list:
             sem_lead += 1
             continue
 
+        match_por[via] += 1
         matched += len(odoo_lead_list)
         for odoo_lead in odoo_lead_list:
             atual = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
             destino = odoo_stage_id if odoo_stage_id is not None else atual
             estado = "PERDIDO(arquiva)" if not ativo else "ativo"
-            log.info(f"'{title}' (#{odoo_lead['id']}) | {atual} -> stage={destino} [{estado}] ({stage_date})")
+            log.info(f"'{title}' (#{odoo_lead['id']}, via {via}) | {atual} -> stage={destino} [{estado}] ({stage_date})")
 
             if DRY_RUN:
                 updated += 1
@@ -225,6 +268,7 @@ def main():
     log.info("=" * 60)
     log.info(f"Total Pipedrive: {len(pd_deals)} | Matched: {matched} | "
              f"Stage não mapeada: {sem_stage} | Lead não encontrado: {sem_lead}")
+    log.info(f"Casamentos por: {match_por}")
     if DRY_RUN:
         log.info(f"Seriam atualizados: {updated} — rode com DRY_RUN=false para aplicar.")
     else:
