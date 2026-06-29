@@ -70,10 +70,13 @@ while True:
     if not pag.get("more_items_in_collection"):
         break
     start = pag["next_start"]
+# filtra SÓ o pipeline BrandSpot (a API ignora o pipeline_id em /deals)
+deals = [d for d in deals if d.get("pipeline_id") == PIPEDRIVE_PIPELINE]
 counts: dict = {}
 for d in deals:
     key = (d.get("stage_id"), d.get("status"))
     counts[key] = counts.get(key, 0) + 1
+print(f"  ({len(deals)} negócios no pipeline {PIPEDRIVE_PIPELINE})")
 for (sid, status), n in sorted(counts.items(), key=lambda x: -x[1]):
     print(f"  {n:>5}  stage_id={sid} [{stage_name_by_id.get(sid, '???')}]  status={status}")
 
