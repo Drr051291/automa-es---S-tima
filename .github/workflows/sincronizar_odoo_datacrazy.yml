@@ -1,0 +1,48 @@
+name: Sincronizar Odoo → DataCrazy (novos negócios)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Só simular (não envia nem marca a tag)"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      limit:
+        description: "Máximo de leads a enviar (0 = sem limite; use 1 para gerar amostra de mapeamento)"
+        default: "0"
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    environment: automações
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Sincronizar negócios
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USER: ${{ secrets.ODOO_USER }}
+          ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
+          ODOO_TEAM_ID_BRANDSPOT: "17"
+          ODOO_TEAM_ID_SETIMA: "16"
+          DATACRAZY_WEBHOOK_BRANDSPOT: ${{ secrets.DATACRAZY_WEBHOOK_BRANDSPOT }}
+          DATACRAZY_WEBHOOK_SETIMA: ${{ secrets.DATACRAZY_WEBHOOK_SETIMA }}
+          DATACRAZY_SYNC_DESDE: "2026-07-15 00:00:00"
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          LIMIT: ${{ github.event.inputs.limit || '0' }}
+        run: python sincronizar_odoo_datacrazy.py
