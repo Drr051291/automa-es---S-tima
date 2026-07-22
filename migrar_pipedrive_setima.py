@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
 """
-Migração única: importa deals do Pipedrive (pipeline 13 - Sétima) que ainda não
-existem no Odoo. Usa o título do deal para verificar duplicatas.
-Deals já importados via Meta Ads (Sheets) são ignorados automaticamente.
+Migração única: importa para o Odoo os deals do Pipedrive (pipeline 13 - Sétima)
+que ainda NÃO existem no Odoo. Inclui histórico:
+  - open  -> criado ativo na etapa mapeada
+  - won   -> criado ativo na etapa Ganho
+  - lost  -> criado ARQUIVADO (status perdido), PRESERVANDO a etapa de origem.
+             NÃO usa a etapa "Perdido": o perdido é um STATUS, não uma etapa.
+
+Dedup: por título (equipe Sétima, ativos+arquivados) para não duplicar os leads
+que já vieram do Meta; e por "Pipedrive ID:" para poder re-rodar sem duplicar o
+que esta migração já criou.
+
+Preserva a data de entrada na etapa (date_last_stage_update = stage_change_time)
+para não perder as métricas de conversão.
+
+Rode primeiro com DRY_RUN=true para revisar.
 """
 
 import logging
 import os
+import re
 import xmlrpc.client
 
 import requests
@@ -39,6 +52,8 @@ STAGE_MAP = {
     "Oportunidade": "Oportunidade",
     "Negociação":   "Negociação",
 }
+ODOO_STAGE_GANHO_NAME    = "Ganho"   # etapa de ganho (is_won)
+ODOO_STAGE_FALLBACK_NAME = "Lead"    # se um lost vier de etapa sem mapeamento
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +74,7 @@ def get_pipedrive_stages() -> dict[int, str]:
 
 
 def get_pipedrive_deals() -> list[dict]:
+    """SÓ deals do pipeline Sétima (a API ignora o filtro pipeline_id)."""
     deals, start = [], 0
     while True:
         data = pd_get("deals", {
@@ -73,7 +89,7 @@ def get_pipedrive_deals() -> list[dict]:
         if not pagination.get("more_items_in_collection"):
             break
         start = pagination["next_start"]
-    return deals
+    return [d for d in deals if d.get("pipeline_id") == PIPEDRIVE_PIPELINE]
 
 
 def extract_person_info(deal: dict) -> tuple[str, str, str]:
@@ -116,15 +132,27 @@ def get_odoo_stages(models, uid) -> dict[str, int]:
     return {s["name"]: s["id"] for s in stages}
 
 
-def get_existing_odoo_titles(models, uid) -> set[str]:
-    """Retorna títulos (lowercase) de todos os leads já existentes no Inbound Sétima."""
+def get_existing_titles(models, uid) -> set[str]:
     leads = models.execute_kw(
-        ODOO_DB, uid, ODOO_API_KEY,
-        "crm.lead", "search_read",
+        ODOO_DB, uid, ODOO_API_KEY, "crm.lead", "search_read",
         [[["team_id", "=", ODOO_TEAM_ID], ["active", "in", [True, False]]]],
         {"fields": ["name"], "limit": 0},
     )
-    return {l["name"].strip().lower() for l in leads}
+    return {(l["name"] or "").strip().lower() for l in leads}
+
+
+def get_existing_pd_ids(models, uid) -> set[str]:
+    leads = models.execute_kw(
+        ODOO_DB, uid, ODOO_API_KEY, "crm.lead", "search_read",
+        [[["description", "like", "Pipedrive ID:"], ["active", "in", [True, False]]]],
+        {"fields": ["description"], "limit": 0},
+    )
+    ids, pat = set(), re.compile(r"Pipedrive ID:\s*(\S+)")
+    for l in leads:
+        m = pat.search(l.get("description") or "")
+        if m:
+            ids.add(m.group(1))
+    return ids
 
 
 def create_or_find_contact(models, uid, name: str, email: str, phone: str) -> int:
@@ -152,6 +180,27 @@ def create_or_find_contact(models, uid, name: str, email: str, phone: str) -> in
 
 
 # ---------------------------------------------------------------------------
+# Resolução do destino
+# ---------------------------------------------------------------------------
+
+def resolve_target(deal, pd_stages, odoo_stages):
+    """(odoo_stage_id, ativo, data). Retorna (None, ...) se open sem mapeamento."""
+    status        = deal.get("status", "open")
+    pd_stage_name = pd_stages.get(deal.get("stage_id"), "")
+    mapped_name   = STAGE_MAP.get(pd_stage_name)
+    mapped_id     = odoo_stages.get(mapped_name) if mapped_name else None
+    fallback_id   = odoo_stages.get(ODOO_STAGE_FALLBACK_NAME)
+
+    if status == "won":
+        return odoo_stages.get(ODOO_STAGE_GANHO_NAME), True, (deal.get("won_time") or deal.get("stage_change_time"))
+    if status == "lost":
+        # Perdido como STATUS, preservando a etapa de origem (fallback = Lead).
+        return (mapped_id or fallback_id), False, (deal.get("stage_change_time") or deal.get("lost_time"))
+    # open
+    return mapped_id, True, (deal.get("stage_change_time") or deal.get("add_time"))
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -161,7 +210,7 @@ def main():
     else:
         log.info("=== MODO REAL — leads serão criados no Odoo ===")
 
-    log.info("Buscando stages do Pipedrive (pipeline 13)...")
+    log.info(f"Buscando stages do Pipedrive (pipeline {PIPEDRIVE_PIPELINE} - Sétima)...")
     pd_stages = get_pipedrive_stages()
     log.info(f"Stages: {list(pd_stages.values())}")
 
@@ -172,69 +221,76 @@ def main():
     log.info("Conectando ao Odoo...")
     models, uid = odoo_connect()
 
-    odoo_stages        = get_odoo_stages(models, uid)
-    existing_titles    = get_existing_odoo_titles(models, uid)
-    log.info(f"{len(existing_titles)} lead(s) já existentes no Odoo (Inbound Sétima).")
+    odoo_stages     = get_odoo_stages(models, uid)
+    existing_titles = get_existing_titles(models, uid)
+    existing_pd_ids = get_existing_pd_ids(models, uid)
+    log.info(f"{len(existing_titles)} título(s) já no Odoo (equipe {ODOO_TEAM_ID}); "
+             f"{len(existing_pd_ids)} já com Pipedrive ID.")
 
-    to_import = [d for d in pd_deals if (d.get("title") or "").strip().lower() not in existing_titles]
-    log.info(f"{len(to_import)} deal(s) do Pipedrive para importar.")
+    criados = pulados = erros = 0
+    por_status = {"open": 0, "won": 0, "lost": 0}
 
-    imported = 0
-    errors = 0
+    for deal in pd_deals:
+        pd_id  = str(deal.get("id", ""))
+        title  = (deal.get("title") or "").strip()
+        status = deal.get("status", "open")
 
-    for deal in to_import:
-        title     = (deal.get("title") or "").strip()
-        pd_status = deal.get("status", "open")
-        pd_stage_id = deal.get("stage_id")
-        pd_stage_name = pd_stages.get(pd_stage_id, "")
+        if pd_id in existing_pd_ids:
+            pulados += 1
+            continue
+        if title and title.lower() in existing_titles:
+            pulados += 1
+            continue
 
-        if pd_status == "won":
-            odoo_stage_name = "Ganho"
-            stage_date = deal.get("won_time") or deal.get("stage_change_time")
-        elif pd_status == "lost":
-            odoo_stage_name = "Perdido"
-            stage_date = deal.get("lost_time") or deal.get("stage_change_time")
-        else:
-            odoo_stage_name = STAGE_MAP.get(pd_stage_name)
-            stage_date = deal.get("stage_change_time") or deal.get("add_time")
-            if not odoo_stage_name:
-                if pd_stage_name:
-                    log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
-                continue
+        stage_id, ativo, stage_date = resolve_target(deal, pd_stages, odoo_stages)
 
-        odoo_stage_id = odoo_stages.get(odoo_stage_name)
-        if not odoo_stage_id:
-            log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
+        # Deal aberto cuja etapa não tem mapeamento: não sabemos onde colocar.
+        if status == "open" and stage_id is None:
+            pd_stage_name = pd_stages.get(deal.get("stage_id"), "")
+            if pd_stage_name:
+                log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
             continue
 
         person_name, email, phone = extract_person_info(deal)
+        nome_lead = title or person_name or f"Negócio Pipedrive {pd_id}"
 
-        log.info(f"'{title}' | Contato: '{person_name}' | Stage: {odoo_stage_name} ({stage_date})")
+        por_status[status] = por_status.get(status, 0) + 1
+        log.info(f"[{status}] '{nome_lead}' (PD#{pd_id}) -> stage={stage_id} "
+                 f"{'ativo' if ativo else 'ARQUIVADO(perdido)'} ({stage_date})")
 
         if DRY_RUN:
-            imported += 1
+            criados += 1
+            if title:
+                existing_titles.add(title.lower())
+            existing_pd_ids.add(pd_id)
             continue
 
         try:
             partner_id = create_or_find_contact(models, uid, person_name, email, phone)
 
             description = "\n".join([
-                f"Pipedrive ID: {deal.get('id', '')}",
-                f"Data de entrada na stage: {stage_date or ''}",
+                f"Pipedrive ID: {pd_id}",
+                "Origem: Pipedrive (migração Sétima)",
+                f"Data de entrada na etapa: {stage_date or ''}",
             ])
 
             vals = {
-                "name": title or "Lead Pipedrive",
+                "name": nome_lead,
                 "partner_id": partner_id,
                 "description": description,
                 "type": "opportunity",
                 "team_id": ODOO_TEAM_ID,
-                "stage_id": odoo_stage_id,
+                "stage_id": stage_id,
+                "active": ativo,
             }
             if stage_date:
                 vals["date_last_stage_update"] = stage_date
+            if status == "won":
+                vals["probability"] = 100
+            elif status == "lost":
+                vals["probability"] = 0
 
-            vals = {k: v for k, v in vals.items() if v not in (None, "", 0)}
+            vals = {k: v for k, v in vals.items() if v not in (None, "")}
 
             lead_id = models.execute_kw(
                 ODOO_DB, uid, ODOO_API_KEY,
@@ -242,16 +298,20 @@ def main():
                 [vals],
             )
             log.info(f"  Criado: Odoo#{lead_id}")
-            imported += 1
+            criados += 1
+            if title:
+                existing_titles.add(title.lower())
+            existing_pd_ids.add(pd_id)
         except Exception as exc:
-            log.error(f"  Erro ao criar '{title}': {exc}")
-            errors += 1
+            log.error(f"  Erro ao criar '{nome_lead}' (PD#{pd_id}): {exc}")
+            erros += 1
 
     log.info("=" * 60)
+    log.info(f"Sétima: {len(pd_deals)} | Pulados (já no Odoo): {pulados} | Por status: {por_status}")
     if DRY_RUN:
-        log.info(f"Seriam importados: {imported} — rode com DRY_RUN=false para aplicar.")
+        log.info(f"Seriam criados: {criados} — rode com DRY_RUN=false para aplicar.")
     else:
-        log.info(f"Importados: {imported} | Erros: {errors}")
+        log.info(f"Criados: {criados} | Erros: {erros}")
 
 
 if __name__ == "__main__":

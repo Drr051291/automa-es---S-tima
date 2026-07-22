@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
 """
-Migração única: sincroniza stages do Pipedrive (pipeline 13 - Sétima) → Odoo (Inbound Sétima).
-Lê a stage atual de cada deal + data de entrada e atualiza o Odoo.
+Sincroniza o pipe Sétima do Pipedrive (pipeline 13) -> Odoo (equipe 16).
+
+Tratamento de status do deal no Pipedrive:
+  - open  -> move para a etapa mapeada (ativo)
+  - won   -> move para a etapa "Ganho" (ativo)
+  - lost  -> marca como PERDIDO via status (active=False, probability=0),
+             PRESERVANDO a etapa onde o lead estava quando foi perdido.
+             NÃO usa a etapa "Perdido": o perdido é um STATUS, não uma etapa,
+             para não descaracterizar a métrica de conversão etapa a etapa.
+
+Preserva a data de entrada na etapa (date_last_stage_update = stage_change_time
+do Pipedrive) para não perder as métricas de conversão.
+
+Match do deal com o lead do Odoo por título -> e-mail -> telefone, entre os
+leads da equipe Sétima (tanto os vindos do Meta quanto os migrados do Pipedrive).
 """
 
 import logging
 import os
+import re
 import xmlrpc.client
 
 import requests
@@ -30,7 +44,7 @@ ODOO_TEAM_ID       = int(os.environ.get("ODOO_TEAM_ID_SETIMA", "16"))
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
-# Mapeamento: nome da stage no Pipedrive → nome exato no Odoo
+# De-para por NOME: stage do Pipedrive (pipeline 13) -> nome exato da etapa no Odoo
 STAGE_MAP = {
     "Lead":         "Lead",
     "MQL":          "MQL",
@@ -39,6 +53,7 @@ STAGE_MAP = {
     "Oportunidade": "Oportunidade",
     "Negociação":   "Negociação",
 }
+ODOO_STAGE_GANHO_NAME = "Ganho"   # etapa de ganho (is_won) para deals ganhos
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +74,11 @@ def get_pipedrive_stages() -> dict[int, str]:
 
 
 def get_pipedrive_deals() -> list[dict]:
+    """SÓ deals do pipeline Sétima.
+
+    O parâmetro `pipeline_id` em /v1/deals é ignorado pela API (devolve deals de
+    todos os pipelines), então filtramos no cliente pelo `pipeline_id` do deal.
+    """
     deals, start = [], 0
     while True:
         data = pd_get("deals", {
@@ -73,7 +93,7 @@ def get_pipedrive_deals() -> list[dict]:
         if not pagination.get("more_items_in_collection"):
             break
         start = pagination["next_start"]
-    return deals
+    return [d for d in deals if d.get("pipeline_id") == PIPEDRIVE_PIPELINE]
 
 
 # ---------------------------------------------------------------------------
@@ -98,23 +118,79 @@ def get_odoo_stages(models, uid) -> dict[str, int]:
     return {s["name"]: s["id"] for s in stages}
 
 
-def get_odoo_leads(models, uid) -> dict[str, list[dict]]:
-    """Retorna leads do Inbound Sétima com Meta ID, agrupados por nome."""
+def _norm_phone(p: str) -> str:
+    """Só dígitos; usa os últimos 9 (ignora DDI/zeros à esquerda)."""
+    digits = re.sub(r"\D", "", p or "")
+    return digits[-9:] if len(digits) >= 9 else digits
+
+
+def extract_person_info(deal: dict) -> tuple[str, str]:
+    """Email e telefone da pessoa ligada ao deal."""
+    person = deal.get("person_id") or {}
+    emails = person.get("email", []) if isinstance(person, dict) else []
+    email = next((e["value"] for e in emails if e.get("primary")), "")
+    if not email and emails:
+        email = emails[0].get("value", "")
+    phones = person.get("phone", []) if isinstance(person, dict) else []
+    phone = next((p["value"] for p in phones if p.get("primary")), "")
+    if not phone and phones:
+        phone = phones[0].get("value", "")
+    return (email or "").strip().lower(), (phone or "").strip()
+
+
+def get_odoo_lead_indexes(models, uid) -> tuple[dict, dict, dict]:
+    """Leads Sétima (Meta + migrados do Pipedrive) indexados por título,
+    e-mail e telefone — para casar mesmo quando o título diverge."""
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
         [[
+            "|",
             ["description", "like", "Lead ID (Meta):"],
+            ["description", "like", "Pipedrive ID:"],
             ["team_id", "=", ODOO_TEAM_ID],
             ["active", "in", [True, False]],
         ]],
-        {"fields": ["id", "name", "stage_id", "active"], "limit": 0},
+        {"fields": ["id", "name", "stage_id", "active", "email_from", "phone"], "limit": 0},
     )
-    result: dict[str, list[dict]] = {}
+    by_title: dict[str, list[dict]] = {}
+    by_email: dict[str, list[dict]] = {}
+    by_phone: dict[str, list[dict]] = {}
     for l in leads:
-        key = l["name"].strip().lower()
-        result.setdefault(key, []).append(l)
-    return result
+        t = (l.get("name") or "").strip().lower()
+        if t:
+            by_title.setdefault(t, []).append(l)
+        e = (l.get("email_from") or "").strip().lower()
+        if e:
+            by_email.setdefault(e, []).append(l)
+        ph = _norm_phone(l.get("phone"))
+        if ph:
+            by_phone.setdefault(ph, []).append(l)
+    return by_title, by_email, by_phone
+
+
+# ---------------------------------------------------------------------------
+# Resolução do destino
+# ---------------------------------------------------------------------------
+
+def resolve_target(deal, pd_stages, odoo_stages, ganho_id):
+    """Retorna (odoo_stage_id, ativo, data) para o deal.
+
+    - odoo_stage_id None => não mexer na etapa (lost cuja etapa não tem mapeamento).
+    - ativo False => marcar como perdido (status), preservando a etapa.
+    """
+    status        = deal.get("status", "open")
+    pd_stage_name = pd_stages.get(deal.get("stage_id"), "")
+    mapped_name   = STAGE_MAP.get(pd_stage_name)
+    mapped_id     = odoo_stages.get(mapped_name) if mapped_name else None
+
+    if status == "won":
+        return ganho_id, True, (deal.get("won_time") or deal.get("stage_change_time"))
+    if status == "lost":
+        # Perdido como STATUS: arquiva e preserva a etapa de origem (se mapeada).
+        return mapped_id, False, (deal.get("stage_change_time") or deal.get("lost_time"))
+    # open
+    return mapped_id, True, (deal.get("stage_change_time") or deal.get("add_time"))
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +201,9 @@ def main():
     if DRY_RUN:
         log.info("=== MODO SIMULAÇÃO (DRY_RUN=true) — nada será alterado ===")
     else:
-        log.info("=== MODO REAL — stages serão atualizados no Odoo ===")
+        log.info("=== MODO REAL — leads serão atualizados no Odoo ===")
 
-    log.info("Buscando stages do Pipedrive (pipeline 13 - Sétima)...")
+    log.info(f"Buscando stages do Pipedrive (pipeline {PIPEDRIVE_PIPELINE} - Sétima)...")
     pd_stages = get_pipedrive_stages()
     log.info(f"{len(pd_stages)} stage(s): {list(pd_stages.values())}")
 
@@ -137,62 +213,65 @@ def main():
 
     log.info("Conectando ao Odoo...")
     models, uid = odoo_connect()
-
     odoo_stages = get_odoo_stages(models, uid)
-    odoo_leads  = get_odoo_leads(models, uid)
-    log.info(f"{len(odoo_leads)} oportunidade(s) Sétima no Odoo.")
+    ganho_id = odoo_stages.get(ODOO_STAGE_GANHO_NAME)
+    if not ganho_id:
+        log.warning(f"Etapa '{ODOO_STAGE_GANHO_NAME}' não encontrada no Odoo — deals ganhos ficarão na etapa atual.")
 
-    matched = 0
-    sem_stage = 0
-    sem_lead = 0
-    updated = 0
-    errors = 0
+    by_title, by_email, by_phone = get_odoo_lead_indexes(models, uid)
+    log.info("Índices Odoo: "
+             f"{len(by_title)} título(s), {len(by_email)} e-mail(s), {len(by_phone)} telefone(s).")
+
+    matched = sem_lead = sem_stage = updated = errors = 0
+    match_por = {"titulo": 0, "email": 0, "telefone": 0}
 
     for deal in pd_deals:
-        title       = (deal.get("title") or "").strip()
-        pd_status   = deal.get("status", "open")
-        pd_stage_id = deal.get("stage_id")
-        pd_stage_name = pd_stages.get(pd_stage_id, "")
+        title  = (deal.get("title") or "").strip()
+        status = deal.get("status", "open")
+        odoo_stage_id, ativo, stage_date = resolve_target(deal, pd_stages, odoo_stages, ganho_id)
 
-        if pd_status == "won":
-            odoo_stage_name = "Ganho"
-            stage_date = deal.get("won_time") or deal.get("stage_change_time")
-        elif pd_status == "lost":
-            odoo_stage_name = "Perdido"
-            stage_date = deal.get("lost_time") or deal.get("stage_change_time")
-        else:
-            odoo_stage_name = STAGE_MAP.get(pd_stage_name)
-            stage_date = deal.get("stage_change_time") or deal.get("add_time")
-            if not odoo_stage_name:
-                if pd_stage_name:
-                    log.warning(f"Stage '{pd_stage_name}' sem mapeamento — '{title}'")
-                sem_stage += 1
-                continue
-
-        odoo_stage_id = odoo_stages.get(odoo_stage_name)
-        if not odoo_stage_id:
-            log.warning(f"Stage '{odoo_stage_name}' não encontrada no Odoo — '{title}'")
+        # Deal aberto cuja etapa não está mapeada: não sabemos para onde mover.
+        if status == "open" and odoo_stage_id is None:
+            log.warning(f"Stage Pipedrive '{pd_stages.get(deal.get('stage_id'), '?')}' sem mapeamento — '{title}'")
             sem_stage += 1
             continue
 
-        odoo_lead_list = odoo_leads.get(title.lower())
+        # Casa por título; se não achar, tenta por e-mail; depois por telefone.
+        email, phone = extract_person_info(deal)
+        odoo_lead_list, via = [], None
+        if title and by_title.get(title.lower()):
+            odoo_lead_list, via = by_title[title.lower()], "titulo"
+        elif email and by_email.get(email):
+            odoo_lead_list, via = by_email[email], "email"
+        elif _norm_phone(phone) and by_phone.get(_norm_phone(phone)):
+            odoo_lead_list, via = by_phone[_norm_phone(phone)], "telefone"
+
         if not odoo_lead_list:
             sem_lead += 1
             continue
 
+        match_por[via] += 1
         matched += len(odoo_lead_list)
         for odoo_lead in odoo_lead_list:
-            current = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
-            log.info(f"'{title}' (#{odoo_lead['id']}) | {current} → {odoo_stage_name} ({stage_date})")
+            atual = odoo_lead["stage_id"][1] if odoo_lead["stage_id"] else "?"
+            destino = odoo_stage_id if odoo_stage_id is not None else atual
+            estado = "PERDIDO(status)" if not ativo else "ativo"
+            log.info(f"'{title}' (#{odoo_lead['id']}, via {via}) | {atual} -> stage={destino} [{estado}] ({stage_date})")
 
             if DRY_RUN:
                 updated += 1
                 continue
 
             try:
-                write_vals = {"stage_id": odoo_stage_id}
+                write_vals: dict = {"active": ativo}
+                if odoo_stage_id is not None:
+                    write_vals["stage_id"] = odoo_stage_id
                 if stage_date:
                     write_vals["date_last_stage_update"] = stage_date
+                if status == "lost":
+                    write_vals["probability"] = 0
+                elif status == "won":
+                    write_vals["probability"] = 100
 
                 models.execute_kw(
                     ODOO_DB, uid, ODOO_API_KEY,
@@ -208,6 +287,7 @@ def main():
     log.info("=" * 60)
     log.info(f"Total Pipedrive: {len(pd_deals)} | Matched: {matched} | "
              f"Stage não mapeada: {sem_stage} | Lead não encontrado: {sem_lead}")
+    log.info(f"Casamentos por: {match_por}")
     if DRY_RUN:
         log.info(f"Seriam atualizados: {updated} — rode com DRY_RUN=false para aplicar.")
     else:

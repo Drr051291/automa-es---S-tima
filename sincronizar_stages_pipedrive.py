@@ -181,7 +181,9 @@ def resolve_target(deal: dict) -> tuple[int | None, bool, str | None]:
 
     if pd_status == "lost":
         # Perdido como STATUS: arquiva e preserva a etapa de origem (se mapeada).
-        return mapped, False, (deal.get("lost_time") or deal.get("stage_change_time"))
+        # Usa a data de ENTRADA na etapa (stage_change_time) para não perder a
+        # métrica de conversão etapa a etapa.
+        return mapped, False, (deal.get("stage_change_time") or deal.get("lost_time"))
 
     # open
     return mapped, True, (deal.get("stage_change_time") or deal.get("add_time"))

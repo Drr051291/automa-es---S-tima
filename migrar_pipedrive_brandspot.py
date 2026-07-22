@@ -108,7 +108,9 @@ def resolve_target(deal: dict) -> tuple[int, bool, str | None]:
     if status == "won":
         return ODOO_STAGE_GANHO, True, (deal.get("won_time") or deal.get("stage_change_time"))
     if status == "lost":
-        return mapped, False, (deal.get("lost_time") or deal.get("stage_change_time"))
+        # Perdido como STATUS, preservando a etapa; data = entrada na etapa
+        # (stage_change_time) para manter a métrica de conversão.
+        return mapped, False, (deal.get("stage_change_time") or deal.get("lost_time"))
     return mapped, True, (deal.get("stage_change_time") or deal.get("add_time"))
 
 
