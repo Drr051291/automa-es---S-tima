@@ -44,9 +44,12 @@ ODOO_TEAM_ID       = int(os.environ.get("ODOO_TEAM_ID_SETIMA", "16"))
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
-# De-para por NOME: stage do Pipedrive (pipeline 13) -> nome exato da etapa no Odoo
+# De-para por NOME: stage do Pipedrive (pipeline 13) -> nome exato da etapa no Odoo.
+# Os nomes no Pipedrive vêm com espaços/plural ("Leads", "SQL ", "Oportunidade "),
+# então o de-para é consultado com o nome normalizado (strip).
 STAGE_MAP = {
     "Lead":         "Lead",
+    "Leads":        "Lead",
     "MQL":          "MQL",
     "Discovery":    "Discovery",
     "SQL":          "SQL",
@@ -181,7 +184,7 @@ def resolve_target(deal, pd_stages, odoo_stages, ganho_id):
     """
     status        = deal.get("status", "open")
     pd_stage_name = pd_stages.get(deal.get("stage_id"), "")
-    mapped_name   = STAGE_MAP.get(pd_stage_name)
+    mapped_name   = STAGE_MAP.get(pd_stage_name.strip())
     mapped_id     = odoo_stages.get(mapped_name) if mapped_name else None
 
     if status == "won":
