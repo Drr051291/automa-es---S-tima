@@ -44,6 +44,41 @@ ODOO_TEAM_ID       = int(os.environ.get("ODOO_TEAM_ID", "17"))
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() != "false"
 
+# Quando um MESMO título casa com mais de N leads no Odoo, tratamos como
+# ambíguo (nome genérico compartilhado por pessoas diferentes) e NÃO casamos
+# por título — evita arquivar em massa leads distintos só porque têm o mesmo
+# nome. Nesses casos ainda tentamos casar por e-mail/telefone (confiável).
+MAX_TITLE_MATCHES = int(os.environ.get("MAX_TITLE_MATCHES", "3"))
+
+# Títulos-lixo/placeholder que nunca identificam uma empresa. Nunca casam por
+# título (independe da contagem). Comparados em minúsculas, sem espaços nas pontas.
+GENERIC_TITLES = {
+    "", ".", "..", "...", "-", "--", "x", "xx", "xxx", "xxxx", "xxxxxx",
+    "ok", "oi", "teste", "test", "asd", "aaa", "abc", "na", "n/a",
+    "autonomo", "autônomo", "advogado", "advogada", "advogados",
+    "empresario", "empresária", "empresário", "empresaria",
+    "empreendedor", "empreendedora", "empresa", "empresas",
+    "professor", "professora", "comerciante", "consultor", "consultora",
+    "psicanalista", "psicologa", "psicóloga", "psicologo", "psicólogo",
+    "medico", "médico", "medica", "médica", "dentista", "corretor", "corretora",
+}
+
+
+def _norm_title(t: str) -> str:
+    return (t or "").strip().lower()
+
+
+def title_ambiguo(title_norm: str, by_title: dict) -> bool:
+    """True se o título não deve ser usado para casar (genérico/curto/ambíguo)."""
+    if title_norm in GENERIC_TITLES:
+        return True
+    if len(title_norm) <= 3:            # "a7", "i9", "cf", "g9"...
+        return True
+    if len(by_title.get(title_norm, [])) > MAX_TITLE_MATCHES:
+        return True
+    return False
+
+
 # -------------------------------------------------------------------------
 # De-para POR ID: Pipedrive stage_id (pipeline 9) -> Odoo crm.stage id
 # -------------------------------------------------------------------------
@@ -223,7 +258,7 @@ def main():
     log.info("Índices Odoo: "
              f"{len(by_title)} título(s), {len(by_email)} e-mail(s), {len(by_phone)} telefone(s).")
 
-    matched = sem_lead = sem_stage = updated = errors = 0
+    matched = sem_lead = sem_stage = updated = errors = ambiguos = 0
     match_por = {"titulo": 0, "email": 0, "telefone": 0}
 
     for deal in pd_deals:
@@ -237,18 +272,27 @@ def main():
             sem_stage += 1
             continue
 
-        # Casa por título; se não achar, tenta por e-mail; depois por telefone.
+        # Casa por título (se não for genérico/ambíguo); senão por e-mail; senão
+        # por telefone. Títulos genéricos ("Autônomo", ".", etc.) ou que casam
+        # com muitos leads distintos são ignorados para não arquivar em massa.
         email, phone = extract_person_info(deal)
+        title_norm = _norm_title(title)
+        ambiguo = bool(title_norm) and title_ambiguo(title_norm, by_title)
         odoo_lead_list, via = [], None
-        if title and by_title.get(title.lower()):
-            odoo_lead_list, via = by_title[title.lower()], "titulo"
+        if title_norm and not ambiguo and by_title.get(title_norm):
+            odoo_lead_list, via = by_title[title_norm], "titulo"
         elif email and by_email.get(email):
             odoo_lead_list, via = by_email[email], "email"
         elif _norm_phone(phone) and by_phone.get(_norm_phone(phone)):
             odoo_lead_list, via = by_phone[_norm_phone(phone)], "telefone"
 
         if not odoo_lead_list:
-            sem_lead += 1
+            if ambiguo:
+                ambiguos += 1
+                log.warning(f"Título genérico/ambíguo, não casado por título: '{title}' "
+                            f"({len(by_title.get(title_norm, []))} lead(s) com esse nome)")
+            else:
+                sem_lead += 1
             continue
 
         match_por[via] += 1
@@ -287,7 +331,8 @@ def main():
 
     log.info("=" * 60)
     log.info(f"Total Pipedrive: {len(pd_deals)} | Matched: {matched} | "
-             f"Stage não mapeada: {sem_stage} | Lead não encontrado: {sem_lead}")
+             f"Stage não mapeada: {sem_stage} | Lead não encontrado: {sem_lead} | "
+             f"Título ambíguo (ignorado): {ambiguos}")
     log.info(f"Casamentos por: {match_por}")
     if DRY_RUN:
         log.info(f"Seriam atualizados: {updated} — rode com DRY_RUN=false para aplicar.")
