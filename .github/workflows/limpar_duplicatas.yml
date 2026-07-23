@@ -4,13 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Simular sem apagar (true = apenas mostra, false = apaga de verdade)"
+        description: "Simular sem alterar (true = apenas mostra, false = aplica)"
         required: true
         default: "true"
         type: choice
         options:
           - "true"
           - "false"
+      hard_delete:
+        description: "Apagar de vez? (false = arquivar/reversível, true = unlink/irreversível)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      team_id:
+        description: "Equipe (17 = Campanhas BrandSpot, vazio = todas)"
+        required: false
+        default: "17"
 
 jobs:
   limpar:
@@ -37,4 +49,6 @@ jobs:
           ODOO_USER: ${{ secrets.ODOO_USER }}
           ODOO_API_KEY: ${{ secrets.ODOO_API_KEY }}
           DRY_RUN: ${{ inputs.dry_run }}
+          HARD_DELETE: ${{ inputs.hard_delete }}
+          ODOO_TEAM_ID: ${{ inputs.team_id }}
         run: python limpar_duplicatas.py
