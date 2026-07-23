@@ -156,7 +156,7 @@ def get_odoo_lead_indexes(models, uid) -> tuple[dict, dict, dict]:
     for i in range(0, len(partner_ids), 500):
         for p in models.execute_kw(
             ODOO_DB, uid, ODOO_API_KEY, "res.partner", "read",
-            [partner_ids[i:i + 500]], {"fields": ["email", "phone", "mobile"]},
+            [partner_ids[i:i + 500]], {"fields": ["email", "phone"]},
         ):
             partner_by_id[p["id"]] = p
 
@@ -174,7 +174,7 @@ def get_odoo_lead_indexes(models, uid) -> tuple[dict, dict, dict]:
             by_email.setdefault(e, []).append(l)
         phones = {
             _norm_phone(x)
-            for x in (l.get("phone"), partner.get("phone"), partner.get("mobile"))
+            for x in (l.get("phone"), partner.get("phone"))
             if _norm_phone(x)
         }
         for ph in phones:
