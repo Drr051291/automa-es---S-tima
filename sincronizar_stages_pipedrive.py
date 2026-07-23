@@ -144,20 +144,40 @@ def get_odoo_lead_indexes(models, uid) -> tuple[dict, dict, dict]:
             ["team_id", "=", ODOO_TEAM_ID],
             ["active", "in", [True, False]],
         ]],
-        {"fields": ["id", "name", "stage_id", "active", "email_from", "phone"], "limit": 0},
+        {"fields": ["id", "name", "stage_id", "active", "email_from", "phone", "partner_id"], "limit": 0},
     )
+
+    # Leads do Meta guardam e-mail/telefone no CONTATO (res.partner), não no
+    # próprio lead. Sem ler o contato, o casamento por e-mail/telefone falha e
+    # o lead nunca é movido/arquivado. Buscamos os contatos em lote e usamos
+    # como reforço quando o lead não tem e-mail/telefone preenchido.
+    partner_ids = list({l["partner_id"][0] for l in leads if l.get("partner_id")})
+    partner_by_id: dict[int, dict] = {}
+    for i in range(0, len(partner_ids), 500):
+        for p in models.execute_kw(
+            ODOO_DB, uid, ODOO_API_KEY, "res.partner", "read",
+            [partner_ids[i:i + 500]], {"fields": ["email", "phone", "mobile"]},
+        ):
+            partner_by_id[p["id"]] = p
+
     by_title: dict[str, list[dict]] = {}
     by_email: dict[str, list[dict]] = {}
     by_phone: dict[str, list[dict]] = {}
     for l in leads:
+        partner = partner_by_id.get(l["partner_id"][0]) if l.get("partner_id") else {}
         t = (l.get("name") or "").strip().lower()
         if t:
             by_title.setdefault(t, []).append(l)
-        e = (l.get("email_from") or "").strip().lower()
+        e = ((l.get("email_from") or "").strip().lower()
+             or (partner.get("email") or "").strip().lower())
         if e:
             by_email.setdefault(e, []).append(l)
-        ph = _norm_phone(l.get("phone"))
-        if ph:
+        phones = {
+            _norm_phone(x)
+            for x in (l.get("phone"), partner.get("phone"), partner.get("mobile"))
+            if _norm_phone(x)
+        }
+        for ph in phones:
             by_phone.setdefault(ph, []).append(l)
     return by_title, by_email, by_phone
 
