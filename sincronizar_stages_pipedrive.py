@@ -188,6 +188,15 @@ def resolve_target(deal: dict) -> tuple[int | None, bool, str | None]:
 
 
 def main():
+    if os.environ.get("CONFIRMAR_LEITURA_PIPEDRIVE", "").lower() != "true":
+        log.warning(
+            "Sincronização de stages Pipedrive → Odoo (BrandSpot) já concluída. "
+            "Este script LÊ o Pipedrive e serve apenas para a migração pontual — "
+            "não faz parte do fluxo contínuo (Meta → Odoo → DataCrazy). Para rodar "
+            "mesmo assim, defina CONFIRMAR_LEITURA_PIPEDRIVE=true."
+        )
+        return
+
     if DRY_RUN:
         log.info("=== MODO SIMULAÇÃO (DRY_RUN=true) — nada será alterado ===")
     else:

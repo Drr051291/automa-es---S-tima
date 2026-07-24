@@ -63,22 +63,86 @@ def odoo_connect():
     return models, uid
 
 
-def get_existing_meta_ids(models, uid) -> set:
-    """Consulta o Odoo e retorna o conjunto de Meta IDs já importados."""
+META_ID_PATTERN = re.compile(r"Lead ID \(Meta\):\s*(\S+)")
+
+
+def normalizar_telefone(raw: str) -> str:
+    """Reduz um telefone a uma chave comparável: só dígitos, sem DDI 55, últimos 8."""
+    digits = re.sub(r"\D", "", raw or "")
+    if not digits:
+        return ""
+    if digits.startswith("55") and len(digits) >= 12:
+        digits = digits[2:]
+    return digits[-8:] if len(digits) >= 8 else digits
+
+
+def get_existing_identities(models, uid) -> tuple[set, set, set]:
+    """Indexa TODOS os leads do pipe (ativos + arquivados) por Meta ID, e-mail e
+    telefone, para não recriar quem já existe — inclusive negócios migrados do
+    Pipedrive (descrição "Pipedrive ID:" e contato no res.partner)."""
     leads = models.execute_kw(
         ODOO_DB, uid, ODOO_API_KEY,
         "crm.lead", "search_read",
-        [[["description", "like", "Lead ID (Meta):"]]],
-        {"fields": ["description"], "limit": 0},
+        [[
+            ["team_id", "=", ODOO_TEAM_ID],
+            ["active", "in", [True, False]],
+        ]],
+        {"fields": ["description", "email_from", "phone", "partner_id"], "limit": 0},
     )
-    ids = set()
-    pattern = re.compile(r"Lead ID \(Meta\):\s*(\S+)")
+
+    meta_ids: set = set()
+    emails: set = set()
+    phones: set = set()
+    partner_ids: set = set()
+
     for lead in leads:
-        match = pattern.search(lead.get("description") or "")
+        match = META_ID_PATTERN.search(lead.get("description") or "")
         if match:
-            ids.add(match.group(1))
-    log.info(f"{len(ids)} Meta ID(s) já existentes no Odoo.")
-    return ids
+            meta_ids.add(match.group(1))
+        email = (lead.get("email_from") or "").strip().lower()
+        if email:
+            emails.add(email)
+        phone = normalizar_telefone(lead.get("phone") or "")
+        if phone:
+            phones.add(phone)
+        pid = lead.get("partner_id")
+        if pid:
+            partner_ids.add(pid[0] if isinstance(pid, (list, tuple)) else pid)
+
+    if partner_ids:
+        partners = models.execute_kw(
+            ODOO_DB, uid, ODOO_API_KEY,
+            "res.partner", "read",
+            [list(partner_ids)],
+            {"fields": ["email", "phone"]},
+        )
+        for p in partners:
+            email = (p.get("email") or "").strip().lower()
+            if email:
+                emails.add(email)
+            phone = normalizar_telefone(p.get("phone") or "")
+            if phone:
+                phones.add(phone)
+
+    log.info(
+        f"Índice de identidade: {len(meta_ids)} Meta ID(s), "
+        f"{len(emails)} e-mail(s), {len(phones)} telefone(s) já no Odoo."
+    )
+    return meta_ids, emails, phones
+
+
+def row_ja_existe(row: dict, meta_ids: set, emails: set, phones: set) -> bool:
+    """True se o lead da planilha já existe no Odoo por Meta ID, e-mail OU telefone."""
+    meta_id = (row.get("id") or "").strip()
+    if meta_id and meta_id in meta_ids:
+        return True
+    email = (row.get("email") or "").strip().lower()
+    if email and email in emails:
+        return True
+    phone = normalizar_telefone((row.get("phone_number") or "").replace("p:", ""))
+    if phone and phone in phones:
+        return True
+    return False
 
 
 # Mapeamento hash das Properties do Odoo -> coluna no Sheets
@@ -177,8 +241,8 @@ def main():
     log.info("Conectando ao Odoo...")
     models, uid = odoo_connect()
 
-    existing_ids = get_existing_meta_ids(models, uid)
-    new_records = [r for r in records if r.get("id", "") not in existing_ids]
+    meta_ids, emails, phones = get_existing_identities(models, uid)
+    new_records = [r for r in records if not row_ja_existe(r, meta_ids, emails, phones)]
     log.info(f"{len(new_records)} lead(s) novo(s) para importar.")
 
     if not new_records:

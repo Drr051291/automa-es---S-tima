@@ -11,6 +11,14 @@ on:
         options:
           - "true"
           - "false"
+      confirmar:
+        description: "Confirmar leitura do Pipedrive (migração já concluída — só marque true para uma nova migração pontual)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   sincronizar:
@@ -39,4 +47,5 @@ jobs:
           PIPEDRIVE_TOKEN: ${{ secrets.PIPEDRIVE_TOKEN }}
           PIPEDRIVE_PIPELINE_ID: "9"
           DRY_RUN: ${{ inputs.dry_run }}
+          CONFIRMAR_LEITURA_PIPEDRIVE: ${{ inputs.confirmar }}
         run: python sincronizar_stages_pipedrive.py
