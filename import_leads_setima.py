@@ -72,11 +72,9 @@ def normalizar_telefone(raw: str) -> str:
     Meta, o Pipedrive migrado e o Odoo (ex.: '+55 (11) 99999-8888' e
     '11999998888' viram a mesma chave)."""
     digits = re.sub(r"\D", "", raw or "")
-    if not digits:
-        return ""
     if digits.startswith("55") and len(digits) >= 12:
         digits = digits[2:]
-    return digits[-8:] if len(digits) >= 8 else digits
+    return digits if len(digits) >= 10 else ""
 
 
 def get_existing_identities(models, uid) -> tuple[set, set, set]:

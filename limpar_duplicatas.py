@@ -48,12 +48,16 @@ def odoo_connect():
 
 
 def normalizar_telefone(raw: str) -> str:
+    """Número nacional completo (DDD+número), só dígitos, sem DDI 55.
+
+    Usa o número inteiro (não só o sufixo) para NÃO agrupar pessoas distintas de
+    DDDs diferentes que compartilhem os últimos 8 dígitos. Telefones com menos de
+    10 dígitos são considerados inválidos e não geram chave (evita merge por
+    número parcial/garbage)."""
     digits = re.sub(r"\D", "", raw or "")
-    if not digits:
-        return ""
     if digits.startswith("55") and len(digits) >= 12:
         digits = digits[2:]
-    return digits[-8:] if len(digits) >= 8 else digits
+    return digits if len(digits) >= 10 else ""
 
 
 def identidades_do_lead(lead: dict, partner_email: str, partner_phone: str) -> set[str]:
