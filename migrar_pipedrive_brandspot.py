@@ -152,6 +152,15 @@ def get_existing_pd_ids(models, uid) -> set[str]:
 # ---------------------------------------------------------------------------
 
 def main():
+    if os.environ.get("CONFIRMAR_LEITURA_PIPEDRIVE", "").lower() != "true":
+        log.warning(
+            "Migração Pipedrive → Odoo (BrandSpot) já concluída. Este script LÊ o "
+            "Pipedrive e serve apenas para a migração pontual — não faz parte do "
+            "fluxo contínuo (Meta → Odoo → DataCrazy). Para rodar mesmo assim, "
+            "defina CONFIRMAR_LEITURA_PIPEDRIVE=true."
+        )
+        return
+
     if DRY_RUN:
         log.info("=== MODO SIMULAÇÃO (DRY_RUN=true) — nada será criado ===")
     else:

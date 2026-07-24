@@ -156,6 +156,15 @@ def create_or_find_contact(models, uid, name: str, email: str, phone: str) -> in
 # ---------------------------------------------------------------------------
 
 def main():
+    if os.environ.get("CONFIRMAR_LEITURA_PIPEDRIVE", "").lower() != "true":
+        log.warning(
+            "Migração Pipedrive → Odoo (Sétima) já concluída. Este script LÊ o "
+            "Pipedrive e serve apenas para a migração pontual — não faz parte do "
+            "fluxo contínuo (Meta → Odoo → DataCrazy). Para rodar mesmo assim, "
+            "defina CONFIRMAR_LEITURA_PIPEDRIVE=true."
+        )
+        return
+
     if DRY_RUN:
         log.info("=== MODO SIMULAÇÃO (DRY_RUN=true) — nada será criado ===")
     else:
